@@ -1,0 +1,6 @@
+{
+  "overall": {"brand_acc": 0.80, "category_acc": 0.80},
+  "en": {"brand_acc": 0.70},
+  "hi": {"brand_acc": 0.75},
+  "ta": {"brand_acc": 0.75}
+}

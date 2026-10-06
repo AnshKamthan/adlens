@@ -1,0 +1,77 @@
+# Illustrative Kubernetes manifests: what a platform team's Helm chart renders to.
+# You will mostly READ these at work. Validated as YAML only, not applied to a cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adlens-config
+data:
+  APP_ENV: "staging"
+  LLM_PROVIDER: "openai_compat"
+  LLM_BASE_URL: "http://llm-gateway.ai-platform.svc.cluster.local/v1"
+  LLM_MODEL: "gpt-4o-mini"
+  PROMPT_VERSION: "v2"
+  REDIS_URL: "redis://redis.adlens.svc.cluster.local:6379/0"
+---
+# Real secrets are NOT committed. They are synced from Vault / AWS Secrets Manager /
+# Azure Key Vault by something like External Secrets Operator.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: adlens-secrets
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql+psycopg://user:CHANGE_ME@postgres:5432/adlens"
+  LLM_API_KEY: "CHANGE_ME"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adlens
+  labels: {app: adlens}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: adlens}
+  template:
+    metadata:
+      labels: {app: adlens}
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/ai/adlens:3f2c9e1   # immutable tag = git SHA, never :latest
+          ports: [{containerPort: 8000}]
+          envFrom:
+            - configMapRef: {name: adlens-config}
+            - secretRef: {name: adlens-secrets}
+          readinessProbe:            # failing -> removed from load balancer, not restarted
+            httpGet: {path: /readyz, port: 8000}
+            periodSeconds: 10
+          livenessProbe:             # failing -> container restarted
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}   # what the scheduler reserves
+            limits: {memory: 512Mi}                # exceed -> OOMKilled
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adlens
+spec:
+  selector: {app: adlens}
+  ports: [{port: 80, targetPort: 8000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: adlens
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: adlens}
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}

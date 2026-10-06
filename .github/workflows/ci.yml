@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read   # least privilege for the workflow token
+
+jobs:
+  lint-test-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Many teams pin actions to a full commit SHA instead of a tag (supply-chain safety).
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - name: Install
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Unit tests
+        run: uv run pytest -q
+      - name: Offline eval gate (FakeLLM, deterministic, free)
+        run: uv run python -m evals.run_eval --check evals/thresholds.json
+
+  docker-build:
+    needs: lint-test-eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: docker build -t adlens:${{ github.sha }} .
+      # A real pipeline would now push to a registry (ECR/ACR/GCR/Artifactory) and
+      # let CD (Argo CD / Flux / Helm / Spinnaker) roll it out to dev -> staging -> prod.
